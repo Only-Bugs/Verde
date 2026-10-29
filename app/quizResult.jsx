@@ -4,12 +4,12 @@ import {
   AccessibilityInfo,
   Animated,
   Easing,
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
   Pressable,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Circle } from "react-native-svg";
 import LottieView from "lottie-react-native";
 import colors from "../theme/colors";
@@ -89,7 +89,7 @@ const QuizResultScreen = () => {
   });
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={[]}>
       <View style={styles.container}>
         {showConfetti && (
           <LottieView

@@ -29,7 +29,7 @@ const SKELETON_COUNT = 3;
 const PAGE_FADE_OUT = 150;
 const PAGE_FADE_IN = 190;
 const API_FALLBACK_ENDPOINT =
-  "https://ayrnx5os0c.execute-api.ap-southeast-2.amazonaws.com/dev/articles";
+  "https://ipg9jzatg7.execute-api.ap-southeast-2.amazonaws.com/dev/articles";
 const ARTICLES_SUBTITLE = "Fresh guidance to support your greener habits.";
 
 const ARTICLE_TABS = [

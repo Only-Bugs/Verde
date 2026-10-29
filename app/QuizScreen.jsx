@@ -8,12 +8,12 @@ import {
   FlatList,
   Modal,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useUser } from "../context/UserContext";
 import { awardQuizPoints, flushQuizAwardQueue } from "../services/apis/quizAPI";
 import StorageService from "../services/storage";
@@ -323,7 +323,7 @@ const QuizScreen = () => {
     : "Submit Answer";
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={[]}>
       <View style={styles.container}>
         <View style={styles.header}>
           <Pressable

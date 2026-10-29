@@ -38,3 +38,17 @@ yarn-error.*
 
 app-example
 .kiro
+
+# local environment (API_BASE_URL for EAS builds lives in eas.json)
+.env
+
+# editor / tooling
+.impeccable/
+
+# backend build output and deploy params
+backend/layer/python/
+backend/.aws-sam/
+backend/.deploy-params
+
+# large build archives
+Iteration-3/*.zip

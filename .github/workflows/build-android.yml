@@ -6,6 +6,7 @@ on:
       - main
       - dev
       - backlog/*
+  workflow_dispatch:
 
 jobs:
   build-android:
@@ -14,18 +15,18 @@ jobs:
     steps:
       # 1. Checkout code
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # 2. Setup Node.js with cache
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: "npm"
 
       # 3. Cache npm & Gradle
       - name: Cache npm & Gradle
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.npm/_npx
@@ -37,6 +38,12 @@ jobs:
       # 4. Install dependencies
       - name: Install dependencies
         run: npm ci
+
+      # 4b. Fail fast on bundling errors before spending an EAS build
+      - name: Verify app bundles
+        env:
+          API_BASE_URL: https://example.invalid
+        run: npx expo export --platform android --output-dir /tmp/verde-export
 
       # 5. Setup Expo & EAS CLI
       - name: Setup Expo
@@ -73,7 +80,7 @@ jobs:
       # 9. Send Discord Notification
       - name: Discord Notification
         if: always()
-        uses: Ilshidur/action-discord@master
+        uses: Ilshidur/action-discord@0.3.2
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         with:

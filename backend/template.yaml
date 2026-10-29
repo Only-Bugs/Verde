@@ -1,0 +1,370 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Verde backend - API Gateway + Lambda (JWT authorizer) + Aurora MySQL Serverless v2 via the RDS Data API
+
+Parameters:
+  JwtModulus:
+    Type: String
+    Description: Base64url RSA modulus (n) of the JWT signing key; produced by scripts/bootstrap_keys.py
+  JwtExponent:
+    Type: String
+    Default: AQAB
+  JwtPrivateKeySecretName:
+    Type: String
+    Default: verde/jwt-private-key
+    Description: Secrets Manager secret holding the private PEM; created by scripts/bootstrap_keys.py
+  JwtKid:
+    Type: String
+    Default: k1
+  DbMinCapacity:
+    Type: Number
+    Default: 0.5
+    Description: Aurora Serverless v2 minimum ACUs (0.5 keeps the demo responsive; cost accrues while the cluster exists)
+  DbMaxCapacity:
+    Type: Number
+    Default: 2
+  SenderEmail:
+    Type: String
+    Default: verde.techtitan.cs@gmail.com
+    Description: SES sender for /sendemail (must be a verified identity; SES sandbox also needs verified recipients)
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [x86_64]
+    MemorySize: 256
+    Timeout: 29
+    Layers:
+      - !Ref DependenciesLayer
+    Environment:
+      Variables:
+        DB_CLUSTER_ARN: !GetAtt DbCluster.DBClusterArn
+        DB_SECRET_ARN: !GetAtt DbCluster.MasterUserSecret.SecretArn
+        JWT_ISS: verde-auth
+        JWT_AUD: verde-api
+
+Resources:
+  # ---------- Shared dependencies (built by scripts/build_layer.sh for the Lambda platform) ----------
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: verde-dependencies
+      Description: aws-lambda-powertools, PyJWT, cryptography, tzdata
+      ContentUri: layer/
+      CompatibleRuntimes: [python3.13]
+      CompatibleArchitectures: [x86_64]
+
+  # ---------- Database ----------
+  DbCluster:
+    Type: AWS::RDS::DBCluster
+    # cfn-lint's bundled engine list predates 3.10.3, which RDS reports as the regional default.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [E3690]
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBClusterIdentifier: verde-db
+      Engine: aurora-mysql
+      EngineVersion: 8.0.mysql_aurora.3.10.3
+      DatabaseName: verde
+      MasterUsername: admin
+      ManageMasterUserPassword: true
+      EnableHttpEndpoint: true # RDS Data API
+      StorageEncrypted: true
+      DeletionProtection: false
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref DbMinCapacity
+        MaxCapacity: !Ref DbMaxCapacity
+
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBClusterIdentifier: !Ref DbCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-mysql
+      PubliclyAccessible: false
+
+  # ---------- Public article images (CC0 / public-domain photos synced by scripts/deploy.sh) ----------
+  AssetsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "verde-assets-${AWS::AccountId}-${AWS::Region}"
+      # Public read is limited to the articles/ prefix by the bucket policy below; ACLs stay blocked.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  AssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadArticleImages
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${AssetsBucket.Arn}/articles/*"
+
+  # ---------- Auth: Lambda authorizer + token issuer + JWKS endpoint ----------
+  AuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-authorizer
+      CodeUri: lambda/
+      Handler: Authorizer.lambda_handler
+      Timeout: 10
+      Environment:
+        Variables:
+          JWKS_URL: !Sub "${JwksFunctionUrl.FunctionUrl}.well-known/jwks.json"
+
+  IssuerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-issuer
+      CodeUri: lambda/
+      Handler: Issuer.lambda_handler
+      Environment:
+        Variables:
+          SECRET_ID: !Ref JwtPrivateKeySecretName
+          KID: !Ref JwtKid
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${JwtPrivateKeySecretName}-*"
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !GetAtt DbCluster.MasterUserSecret.SecretArn
+            - Effect: Allow
+              Action: rds-data:ExecuteStatement
+              Resource: !GetAtt DbCluster.DBClusterArn
+      Events:
+        Token:
+          Type: Api
+          Properties:
+            RestApiId: !Ref VerdeApi
+            Path: /token
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
+  # Public key set for the authorizer. A Function URL (not the REST API) avoids a
+  # circular dependency: the API depends on the authorizer, which needs this URL.
+  JwksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-jwks
+      Handler: index.handler
+      MemorySize: 128
+      Timeout: 5
+      InlineCode: |
+        import json, os
+
+        def handler(event, context):
+            jwk = {
+                "kty": "RSA", "use": "sig", "alg": "RS256",
+                "kid": os.environ["KID"], "n": os.environ["JWK_N"], "e": os.environ["JWK_E"],
+            }
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json", "Cache-Control": "max-age=300"},
+                "body": json.dumps({"keys": [jwk]}),
+            }
+      Environment:
+        Variables:
+          KID: !Ref JwtKid
+          JWK_N: !Ref JwtModulus
+          JWK_E: !Ref JwtExponent
+      FunctionUrlConfig:
+        AuthType: NONE
+
+  JwksInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JwksFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+  # ---------- Business Lambdas (Aurora via Data API) ----------
+  BaselineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-baseline
+      CodeUri: lambda/
+      Handler: Baseline.lambda_handler
+      Policies: [!Ref DataApiPolicy]
+      Events:
+        GetBaseline:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /baseline, Method: GET, Auth: { Authorizer: NONE } }
+        PostBaseline:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /baseline, Method: POST, Auth: { Authorizer: NONE } }
+
+  UserProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-user-profile
+      CodeUri: lambda/
+      Handler: UserProfile.lambda_handler
+      Policies: [!Ref DataApiPolicy]
+      Events:
+        ListUsers:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /user, Method: GET }
+        GetUser:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}", Method: GET }
+        DailySnapshot:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/dailysnapshot", Method: GET }
+        WeeklySnapshot:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/weeklysnapshot", Method: GET }
+        MonthlySnapshot:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/monthlysnapshot", Method: GET }
+        Tips:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /tips, Method: GET, Auth: { Authorizer: NONE } }
+
+  TrackingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-tracking
+      CodeUri: lambda/
+      Handler: tracking.lambda_handler
+      Policies: [!Ref DataApiPolicy]
+      Events:
+        GetTracking:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/tracking", Method: GET }
+        PostTracking:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/tracking", Method: POST }
+
+  ChallengeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-challenge
+      CodeUri: lambda/
+      Handler: Challenge.lambda_handler
+      Policies: [!Ref DataApiPolicy]
+      Events:
+        GetChallenge:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/challenge", Method: GET }
+        PostChallenge:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/challenge", Method: POST }
+        ActivateChallenge:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: "/user/{eco_id}/activate-challenge", Method: POST }
+
+  # The app calls these without a token when nobody is signed in (skipAuth), so they are public.
+  LearningHubFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-learning-hub
+      CodeUri: lambda/
+      Handler: LearningHub.lambda_handler
+      Policies: [!Ref DataApiPolicy]
+      Events:
+        Articles:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /articles, Method: GET, Auth: { Authorizer: NONE } }
+        Quiz:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /quiz, Method: GET, Auth: { Authorizer: NONE } }
+        Rewards:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /rewards, Method: GET, Auth: { Authorizer: NONE } }
+
+  NotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: verde-notification
+      CodeUri: lambda/
+      Handler: Notification.lambda_handler
+      Environment:
+        Variables:
+          SENDER_EMAIL: !Ref SenderEmail
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: "*"
+      Events:
+        SendEmail:
+          Type: Api
+          Properties: { RestApiId: !Ref VerdeApi, Path: /sendemail, Method: POST }
+
+  DataApiPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: rds-data:ExecuteStatement
+            Resource: !GetAtt DbCluster.DBClusterArn
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !GetAtt DbCluster.MasterUserSecret.SecretArn
+
+  # ---------- API Gateway ----------
+  VerdeApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: verde-api
+      StageName: dev
+      Cors:
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Content-Type,Authorization,Accept'"
+        AllowMethods: "'GET,POST,PATCH,OPTIONS'"
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+      Auth:
+        DefaultAuthorizer: VerdeJwtAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          VerdeJwtAuthorizer:
+            FunctionArn: !GetAtt AuthorizerFunction.Arn
+            Identity:
+              Header: Authorization
+              # No caching: the policy returned is scoped to one methodArn, so a cached
+              # policy would 403 the same token on any other route.
+              ReauthorizeEvery: 0
+
+Outputs:
+  ApiBaseUrl:
+    Description: Set API_BASE_URL in Verde-dev/.env to this value
+    Value: !Sub "https://${VerdeApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
+  DbClusterArn:
+    Value: !GetAtt DbCluster.DBClusterArn
+  DbSecretArn:
+    Value: !GetAtt DbCluster.MasterUserSecret.SecretArn
+  JwksUrl:
+    Value: !Sub "${JwksFunctionUrl.FunctionUrl}.well-known/jwks.json"
+  AssetsBucketName:
+    Value: !Ref AssetsBucket
+  AssetsBaseUrl:
+    Description: Public base URL for article images (articles/<article_id>.jpg)
+    Value: !Sub "https://${AssetsBucket}.s3.${AWS::Region}.amazonaws.com"

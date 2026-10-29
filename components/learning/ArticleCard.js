@@ -2,8 +2,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   LayoutAnimation,
-  Linking,
-  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -16,10 +14,10 @@ import dayjs from 'dayjs';
 
 import colors from '../../theme/colors';
 import layout from '../../theme/layout';
+import { ArticleReaderModal } from './ArticleReaderModal';
 
 const CHEVRON_HIT_SLOP = { top: 12, right: 12, bottom: 12, left: 12 };
 const ANIMATION_DURATION = 180;
-const THUMBNAIL_CACHE = new Map();
 const PLACEHOLDER_ICONS = ['eco', 'public', 'article', 'menu-book', 'park'];
 
 function hashString(value = '') {
@@ -35,11 +33,13 @@ const ArticleCardComponent = ({ item, expanded, onToggle, badgeLabel, showThumb 
   const detailProgress = useRef(new Animated.Value(expanded ? 1 : 0)).current;
   const chevronProgress = useRef(new Animated.Value(expanded ? 1 : 0)).current;
   const isExpanded = expanded === true;
-  const [thumbnailUri, setThumbnailUri] = useState(null);
-  const [thumbnailError, setThumbnailError] = useState(false);
-  const [confirmVisible, setConfirmVisible] = useState(false);
-  const [pendingUrl, setPendingUrl] = useState(null);
+  const [imageError, setImageError] = useState(false);
+  const [readerVisible, setReaderVisible] = useState(false);
+  const imageUri = item.image_url && !imageError ? item.image_url : null;
 
+  useEffect(() => {
+    setImageError(false);
+  }, [item.image_url]);
 
   useEffect(() => {
     const config = {
@@ -66,95 +66,18 @@ const ArticleCardComponent = ({ item, expanded, onToggle, badgeLabel, showThumb 
     onToggle();
   };
 
-  const showConfirm = useCallback((url) => {
-    if (!url) {
-      return;
+  // Articles open in an in-app reader so the user never leaves Verde.
+  const handleOpenReader = useCallback(() => {
+    if (item.source_url) {
+      setReaderVisible(true);
     }
-    setPendingUrl(url);
-    setConfirmVisible(true);
+  }, [item.source_url]);
+
+  const handleCloseReader = useCallback(() => {
+    setReaderVisible(false);
   }, []);
-
-  const handleOpenSource = useCallback(() => {
-    showConfirm(item.source_url);
-  }, [item.source_url, showConfirm]);
-
-  const handleCancelVisit = useCallback(() => {
-    setConfirmVisible(false);
-    setPendingUrl(null);
-  }, []);
-
-  const handleConfirmVisit = useCallback(() => {
-    if (!pendingUrl) {
-      setConfirmVisible(false);
-      return;
-    }
-    Linking.openURL(pendingUrl).catch(() => {});
-    setConfirmVisible(false);
-    setPendingUrl(null);
-  }, [pendingUrl]);
 
   const accentColor = `rgba(15, 118, 110, ${accentOpacity})`;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadThumbnail() {
-      if (!showThumb || !item.source_url) {
-        if (!cancelled) {
-          setThumbnailUri(null);
-          setThumbnailError(false);
-        }
-        return;
-      }
-
-      if (THUMBNAIL_CACHE.has(item.article_id)) {
-        const cached = THUMBNAIL_CACHE.get(item.article_id);
-        if (!cancelled) {
-          setThumbnailUri(cached);
-          setThumbnailError(!cached);
-        }
-        return;
-      }
-
-      try {
-        const response = await fetch(item.source_url);
-        const markup = await response.text();
-        const ogMatch = markup.match(/<meta[^>]+(?:property|name)=["']og:image["'][^>]*content=["']([^"']+)["'][^>]*>/i);
-        const imgMatch = markup.match(/<img[^>]+src=["']([^"']+\.(?:png|jpe?g|webp|gif))["'][^>]*>/i);
-        const candidate = ogMatch?.[1] || imgMatch?.[1];
-        if (!candidate) {
-          if (!cancelled) {
-            setThumbnailError(true);
-            THUMBNAIL_CACHE.set(item.article_id, null);
-          }
-          return;
-        }
-        try {
-          const resolved = new URL(candidate, item.source_url).toString();
-          if (!cancelled) {
-            setThumbnailUri(resolved);
-            setThumbnailError(false);
-            THUMBNAIL_CACHE.set(item.article_id, resolved);
-          }
-        } catch (_err) {
-          if (!cancelled) {
-            setThumbnailError(true);
-            THUMBNAIL_CACHE.set(item.article_id, null);
-          }
-        }
-      } catch (_error) {
-        if (!cancelled) {
-          setThumbnailError(true);
-          THUMBNAIL_CACHE.set(item.article_id, null);
-        }
-      }
-    }
-
-    loadThumbnail();
-    return () => {
-      cancelled = true;
-    };
-  }, [item.article_id, item.source_url, showThumb]);
 
   const placeholderIcon = useMemo(() => {
     const index = Math.abs(hashString(item.article_id || item.title)) % PLACEHOLDER_ICONS.length;
@@ -175,12 +98,12 @@ const ArticleCardComponent = ({ item, expanded, onToggle, badgeLabel, showThumb 
         >
           {showThumb ? (
             <View style={styles.thumbnailWrapper}>
-              {thumbnailUri && !thumbnailError ? (
+              {imageUri ? (
                 <Image
-                  source={{ uri: thumbnailUri }}
+                  source={{ uri: imageUri }}
                   style={styles.thumbnailImage}
                   resizeMode="cover"
-                  onError={() => setThumbnailError(true)}
+                  onError={() => setImageError(true)}
                 />
               ) : (
                 <LinearGradient
@@ -265,57 +188,36 @@ const ArticleCardComponent = ({ item, expanded, onToggle, badgeLabel, showThumb 
             },
           ]}
         >
+          {imageUri ? (
+            <Image
+              source={{ uri: imageUri }}
+              style={styles.detailImage}
+              resizeMode="cover"
+              accessibilityIgnoresInvertColors
+              onError={() => setImageError(true)}
+            />
+          ) : null}
           <Text style={styles.detailBrief}>{item.summary}</Text>
           <Text style={styles.detailMeta}>
             {(item.author || 'Unknown author') + ' • ' + formattedDate + ` • ${item.reading_time_minutes} min`}
           </Text>
-          <Text style={styles.detailTip}>Tap the link below to read the full article.</Text>
-          {domain ? (
+          <Text style={styles.detailTip}>Read the full article without leaving Verde.</Text>
+          {item.source_url ? (
             <Pressable
-              onPress={handleOpenSource}
-              accessibilityRole="link"
-              accessibilityHint="Opens in browser"
+              onPress={handleOpenReader}
+              accessibilityRole="button"
+              accessibilityLabel={`Read article: ${item.title}`}
+              accessibilityHint="Opens the article in a reader inside the app"
               hitSlop={CHEVRON_HIT_SLOP}
               style={styles.detailDomainChip}
             >
-              <Text style={styles.detailDomainText}>{domain}</Text>
+              <MaterialIcons name="menu-book" size={16} color="#0B3B2E" />
+              <Text style={styles.detailDomainText}>{domain ? `Read on ${domain}` : 'Read article'}</Text>
             </Pressable>
           ) : null}
         </Animated.View>
       ) : null}
-      <Modal
-        visible={confirmVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCancelVisit}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Leaving Verde</Text>
-            <Text style={styles.modalMessage}>
-              {`You're about to visit: ${domain || pendingUrl || 'this link'}. Do you want to continue?`}
-            </Text>
-            <View style={styles.modalActions}>
-              <Pressable
-                accessibilityRole="button"
-                onPress={handleCancelVisit}
-                hitSlop={layout.hitSlop}
-                style={({ pressed }) => [styles.modalButton, styles.modalButtonSecondary, pressed && styles.modalButtonSecondaryPressed]}
-              >
-                <Text style={styles.modalButtonSecondaryLabel}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                onPress={handleConfirmVisit}
-                hitSlop={layout.hitSlop}
-                style={({ pressed }) => [styles.modalButton, styles.modalButtonPrimary, pressed && styles.modalButtonPrimaryPressed]}
-              >
-                <Text style={styles.modalButtonPrimaryLabel}>Visit</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ArticleReaderModal visible={readerVisible} item={item} onClose={handleCloseReader} />
     </View>
   );
 };
@@ -414,6 +316,12 @@ const styles = StyleSheet.create({
     paddingBottom: layout.itemSpacing,
     gap: 8,
   },
+  detailImage: {
+    width: '100%',
+    height: 160,
+    borderRadius: 12,
+    backgroundColor: colors.neutral.gray100,
+  },
   detailBrief: {
     fontSize: 14,
     lineHeight: 22,
@@ -431,6 +339,9 @@ const styles = StyleSheet.create({
   },
   detailDomainChip: {
     alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: '#E8F7EF',
     borderRadius: 12,
     marginTop: 8,
@@ -441,72 +352,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#0B3B2E',
     fontWeight: '500',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: layout.screenPadding,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 360,
-    backgroundColor: colors.neutral.white,
-    borderRadius: 20,
-    padding: layout.blockSpacing / 2,
-    gap: 16,
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 12,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  modalMessage: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: colors.textSecondary,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-  },
-  modalButton: {
-    borderRadius: 999,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    minWidth: 96,
-    alignItems: 'center',
-  },
-  modalButtonSecondary: {
-    backgroundColor: colors.neutral.white,
-    borderWidth: 1,
-    borderColor: colors.neutral.gray200,
-  },
-  modalButtonSecondaryPressed: {
-    backgroundColor: colors.neutral.gray100,
-  },
-  modalButtonPrimary: {
-    backgroundColor: colors.eco.green[600],
-  },
-  modalButtonPrimaryPressed: {
-    backgroundColor: colors.eco.green[700] || colors.eco.green[600],
-  },
-  modalButtonSecondaryLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  modalButtonPrimaryLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.neutral.white,
   },
 });
 

@@ -12,10 +12,11 @@ export default StyleSheet.create({
   leading: {
     flexDirection: "row",
     alignItems: "center",
-    flexShrink: 1,
+    flex: 1,
+    minWidth: 0,
   },
   title: {
-    fontSize: 20,
+    flexShrink: 1,
     fontWeight: "700",
     color: colors.textPrimary,
   },
@@ -23,6 +24,7 @@ export default StyleSheet.create({
     marginLeft: layout.cardSpacing / 2,
   },
   actions: {
+    flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
   },

@@ -6,13 +6,7 @@
 
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
-import {
-  Platform,
-  SafeAreaView,
-  StyleSheet,
-  TouchableOpacity,
-  TouchableOpacityProps,
-} from "react-native";
+import { TouchableOpacity, TouchableOpacityProps } from "react-native";
 import colors from "../../theme/colors";
 import { useHapticsUtils } from "../../utils/haptics";
 
@@ -87,22 +81,5 @@ export default function TabsLayout() {
     </Tabs>
   );
 
-  return Platform.OS === "android" ? (
-    <SafeAreaView style={[styles.container, styles.androidSafeArea]}>
-      {tabContent}
-    </SafeAreaView>
-  ) : (
-    tabContent
-  );
+  return tabContent;
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  androidSafeArea: {
-    paddingTop: 12,
-    paddingBottom: 4,
-  },
-});

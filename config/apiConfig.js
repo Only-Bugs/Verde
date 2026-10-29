@@ -31,6 +31,7 @@ const apiConfig = {
     getUser: "/user",
     quiz: "/quiz",
     rewards: "/rewards",
+    articles: "/articles",
   },
 };
 

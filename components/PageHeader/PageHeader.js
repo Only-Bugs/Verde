@@ -5,7 +5,7 @@
 
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { Text, TouchableOpacity, View } from "react-native";
+import { Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import colors from "../../theme/colors";
 import layout from "../../theme/layout";
 import { useHapticsUtils } from "../../utils/haptics";
@@ -20,6 +20,9 @@ const PageHeader = ({
 }) => {
   const { hapticPress } = useHapticsUtils();
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  // Scale the title with screen width so it fits phones and tablets alike.
+  const titleSize = Math.min(26, Math.max(18, Math.round(width * 0.055)));
 
   const handleSettings = async () => {
     try {
@@ -61,9 +64,13 @@ const PageHeader = ({
           </TouchableOpacity>
         ) : null}
         <Text
-          style={[styles.title, showBack && styles.titleWithBack]}
-          numberOfLines={1}
-          ellipsizeMode="tail"
+          style={[
+            styles.title,
+            { fontSize: titleSize, lineHeight: Math.round(titleSize * 1.25) },
+            showBack && styles.titleWithBack,
+          ]}
+          numberOfLines={2}
+          maxFontSizeMultiplier={1.3}
         >
           {title}
         </Text>

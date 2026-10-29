@@ -11,9 +11,13 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "NPM_CONFIG_CACHE": "/tmp/.npm"
+        "NPM_CONFIG_CACHE": "/tmp/.npm",
+        "API_BASE_URL": "https://ipg9jzatg7.execute-api.ap-southeast-2.amazonaws.com/dev"
       },
-      "node": "18.18.0"
+      "node": "20.18.0",
+      "android": {
+        "buildType": "apk"
+      }
     },
     "production": {
       "autoIncrement": true

@@ -11,8 +11,20 @@ const ICON_MAP = {
   "Green Thumb": { icon: "eco", bg: "#16A34A" },
   "Recycle Hero": { icon: "recycling", bg: "#F59E0B" },
   "Water Wise": { icon: "water-drop", bg: "#0EA5E9" },
+  "Home Energy": { icon: "bolt", bg: "#22C55E" },
+  "Sustainable Transport": { icon: "directions-bus", bg: "#0EA5E9" },
+  "Food and Waste": { icon: "restaurant", bg: "#F59E0B" },
   default: { icon: "quiz", bg: colors.eco.blue },
 };
+
+// Case/whitespace-insensitive lookup so a topic renamed in the database
+// doesn't silently fall back to the generic icon.
+const ICON_BY_NORMALIZED_TITLE = Object.fromEntries(
+  Object.entries(ICON_MAP).map(([title, data]) => [title.trim().toLowerCase(), data])
+);
+
+const resolveIcon = (title) =>
+  ICON_BY_NORMALIZED_TITLE[String(title ?? "").trim().toLowerCase()] || ICON_MAP.default;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -134,7 +146,7 @@ const QuizCard = ({ quiz }) => {
       : "Come back within the hour to retry.";
   }, [cooldownUntil]);
 
-  const iconData = ICON_MAP[quiz.title] || ICON_MAP.default;
+  const iconData = resolveIcon(quiz.title);
 
   return (
     <View style={styles.card}>
